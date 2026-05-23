@@ -1,6 +1,11 @@
 package gobroker
 
 // Imports
+import (
+	"time"
+	"sync"
+)
+
 
 // Ask(*gobroker)
 // Asks a gobroker to get some information
@@ -17,15 +22,41 @@ package gobroker
 // The GoBroker can be assigned an intervalRefresh rate. If the GoBroker has finished a process and is still in an interval refresh rate it will wait till that refresh rate ends and start searching for new information
 // While it is searching for new information or if it's during an interval where it is still refreshing it will continue to provide the cached value
 
-func Ask() {
-
-}
-
 type BrokerCallback[T any] func() T
 
 type GoBroker[T any] struct {
-	initial T
+	mu sync.Mutex
 	cache T
-	intervalRefresh int
+	intervalRefreshDuration int
+	intervalRefreshStart int
+	hasUpdatedCache bool
 	callback BrokerCallback[T]
+}
+
+
+func (broker *GoBroker[T any]) update() {
+	result := broker.callback()
+
+	broker.mu.Lock()
+
+	broker.cache = result
+	broker.intervalRefreshStart = time.Now()
+	broker.hasUpdatedCache = true
+
+	broker.mu.Unlock()
+}
+
+// Next Calls: Checks if GoBroker cache was updated
+// If GoBroker cache has not updated (hasUpdatedCache is false) return cache value
+// If GoBroker cache has updated (hasUpdatedCache is true) set hasUpdatedCache to false return cache
+// If GoBroker has a refresh interval, continue to return the cache update without running an update
+// If Asking ahead, queue GoBroker to get information immediatly after obtained new information or immediatly after refresh interval has finished
+// If Asking and waiting, pause execuation until cache has been updated.
+func (broker *GoBroker[T any]) Ask(ahead bool, andWait bool) T {
+	broker.mu.Lock()
+	defer broker.my.Unlock()
+	
+
+	
+	return broker.cache
 }
