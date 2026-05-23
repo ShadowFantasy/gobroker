@@ -26,22 +26,50 @@ type BrokerCallback[T any] func() T
 
 type GoBroker[T any] struct {
 	mu sync.Mutex
+	cd sync.Cond
+
 	cache T
-	intervalRefreshDuration int
-	intervalRefreshStart int
+	intervalRefreshDuration time.Duration
+	intervalRefresh time.Time
+
+	isUpdatingCache bool
 	hasUpdatedCache bool
+	wasAsked bool
+
 	callback BrokerCallback[T]
 }
 
+func (broker *GoBroker[T any]) updateHelper() {
+	broker.wasAsked = false
+	waitTime := time.Until( broker.intervalRefresh )
+		
+	broker.mu.Unlock()
 
-func (broker *GoBroker[T any]) update() {
+	time.Sleep( waitTime )
 	result := broker.callback()
 
 	broker.mu.Lock()
-
+		
 	broker.cache = result
-	broker.intervalRefreshStart = time.Now()
+	broker.intervalRefresh = time.Now().Add( broker.intervalRefreshDuration )
 	broker.hasUpdatedCache = true
+
+}
+
+func (broker *GoBroker[T any]) update() {
+	broker.mu.Lock()
+
+	broker.isUpdatingCache = true
+
+	broker.updateHelper()
+	broker.wg.Done()
+
+	for broker.wasAsked {
+		broker.wg.Add(1)
+		broker.updateHelper()
+		broker.wg.Done()
+	}
+	broker.isUpdatingCache = false
 
 	broker.mu.Unlock()
 }
@@ -54,9 +82,39 @@ func (broker *GoBroker[T any]) update() {
 // If Asking and waiting, pause execuation until cache has been updated.
 func (broker *GoBroker[T any]) Ask(ahead bool, andWait bool) T {
 	broker.mu.Lock()
-	defer broker.my.Unlock()
 	
+	if broker.hasUpdatedCache {
+		andWait = false
+	}
 
-	
+	if ahead {
+		broker.wasAsked = true
+		broker.hasUpdatedCache = false
+	}
+
+	if broker.hasUpdatedCache {
+		broker.hasUpdatedCache = false
+		defer broker.mu.Unlock()
+		return broker.cache
+	}
+
+	if !broker.isUpdatingCache && time.Now().After( broker.intervalRefresh ) {
+		broker.wasAsked = true
+
+		broker.wg.Add(1)
+		go broker.update()
+	}
+
+	if andWait {
+		broker.mu.Unlock()
+
+		broker.wg.Wait()
+
+		broker.mu.Lock()
+
+		broker.hasUpdatedCache = false
+	}
+
+	defer broker.mu.Unlock()
 	return broker.cache
 }
